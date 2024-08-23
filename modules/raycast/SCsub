@@ -92,18 +92,18 @@ if env["builtin_embree"]:
             m = re.search(fr"^#define\s{name}(?:\s|\Z)", defines, flags=re.MULTILINE)
             return m is not None
 
-        if is_defined("__AVX512F__") and is_defined("__AVX512DQ__") and is_defined("__AVX512CD__") and is_defined("__AVX512BW__") and is_defined("__AVX512VL__"):
-            isa = "avx512"
-        elif is_defined("__F16C__") and is_defined("__AVX2__") and is_defined("__FMA__") and is_defined("__LZCNT__") and is_defined("__BMI__") and is_defined("__BMI2__"):
-            isa = "avx2"
+        if is_defined("__F16C__") and is_defined("__AVX2__") and is_defined("__FMA__") and is_defined("__LZCNT__") and is_defined("__BMI__") and is_defined("__BMI2__"):
+            if is_defined("__AVX512F__") and is_defined("__AVX512DQ__") and is_defined("__AVX512CD__") and is_defined("__AVX512BW__") and is_defined("__AVX512VL__"):
+                # Embree also enables AVX2 support when targeting AVX512.
+                isa = "avx512"
+            else:
+                isa = "avx2"
         elif is_defined("__AVX__"):
             isa = "avx"
         elif is_defined("__SSE4_1__") and is_defined("__SSE4_2__"):
             isa = "sse42"
         else:
             isa = "sse2"
-
-    print("ENABLED ISA: " + isa)
 
     if isa not in ["sse2", "sse42"]:
         embree_src += embree_avx_src
@@ -125,7 +125,7 @@ if env["builtin_embree"]:
     env_thirdparty.add_source_files(thirdparty_obj, thirdparty_sources)
     env_thirdparty.Append(CPPDEFINES=["EMBREE_LOWEST_ISA", "TASKING_INTERNAL"])
 
-    # These defines are used for MSVC (to signal SSE support) and for ARM (to enable use of NEON in Embree code)
+    # These defines are used for MSVC (to signal SSE support) and for ARM (to enable use of NEON in Embree code).
     sse2_defines = ["__SSE__", "__SSE2__"]
     sse42_defines = ["__SSE4_1__", "__SSE4_2__"]
     if env.msvc:
@@ -133,78 +133,56 @@ if env["builtin_embree"]:
     avx_defines = ["__AVX__", "__BMI__", "__BMI2__", "__LZCNT__"] + sse42_defines
     avx2_defines = ["__AVX2__"] + avx_defines
 
-    if env.msvc:
-        sse2_flags = ["/arch:SSE2"]
-        sse42_flags = ["/arch:SSE2"]  # There's no flag to enable SSE4.2, and Embree can still use SSE4.2 instructions without it.
-        avx_flags = ["/arch:AVX"]
-        avx2_flags = ["/arch:AVX2"]
-        avx512_flags = ["/arch:AVX512"]
-    else:
-        sse2_flags = ["-msse", "-msse2"]
-        sse42_flags = ["-msse4.2"]
-        avx_flags = ["-mavx"]
-        avx2_flags = ["-mf16c", "-mavx2", "-mfma", "-mlzcnt", "-mbmi", "-mbmi2"]
-        avx512_flags = ["-mavx512f", "-mavx512dq", "-mavx512cd", "-mavx512bw", "-mavx512vl", *avx2_flags, "-mprefer-vector-width=256"]
-
-        # Prevent -march from affecting the used instruction set
+    if not env.msvc:
+        # To avoid issues when a certain ISA is partially enabled (for example, when using `-mavx512f` but not `-mavx512vl`),
+        # explicitly disable ISAs higher than the target one.
         no_avx512_flags = ["-mno-avx512f", "-mno-avx512dq", "-mno-avx512cd", "-mno-avx512bw", "-mno-avx512vl"]
         no_avx2_flags = ["-mno-f16c", "-mno-avx2", "-mno-fma", "-mno-lzcnt", "-mno-bmi", "-mno-bmi2"]
         no_avx_flags = ["-mno-avx"]
         no_sse42_flags = ["-mno-sse4.2"]
 
-        sse2_flags += no_sse42_flags + no_avx_flags + no_avx2_flags + no_avx512_flags
-        sse42_flags += no_avx_flags + no_avx2_flags + no_avx512_flags
-        avx_flags += no_avx2_flags + no_avx512_flags
-        avx2_flags += no_avx512_flags
+        sse2_flags = no_sse42_flags + no_avx_flags + no_avx2_flags + no_avx512_flags
+        sse42_flags = no_avx_flags + no_avx2_flags + no_avx512_flags
+        avx_flags = no_avx2_flags + no_avx512_flags
+        avx2_flags = no_avx512_flags
 
     arm = env["arch"] in ["arm32", "arm64"]
-
-    #print(env_thirdparty["ENV"])
-    #print(env_thirdparty["CXXCOM"] + " -E -dM -")  # $CXX -o $TARGET -c $CXXFLAGS $CCFLAGS $_CCCOMCOM $SOURCES -E -dM -
-
-    #print(env_thirdparty.subst(env_thirdparty["CXXCOM"], target=File('-')) + " -E -dM -x c++ -")
-
     if isa == "sse2":
         env_thirdparty.Append(CPPDEFINES=["EMBREE_TARGET_SSE2"])
 
-        if not arm:
-            env_thirdparty.Append(CCFLAGS=sse2_flags)
-
         if env.msvc or arm:
             env_thirdparty.Append(CPPDEFINES=sse2_defines)
+        else:
+            env_thirdparty.Append(CCFLAGS=sse2_flags)
 
         if env["platform"] == "windows" and not env.msvc and env["arch"] == "x86_32":
             env_thirdparty.Append(CCFLAGS=["-mstackrealign"])
     elif isa == "sse42":
         env_thirdparty.Append(CPPDEFINES=["EMBREE_TARGET_SSE42"])
 
-        if not arm:
-            env_thirdparty.Append(CCFLAGS=sse42_flags)
-
         if env.msvc or arm:
             env_thirdparty.Append(CPPDEFINES=sse42_defines)
+        else:
+            env_thirdparty.Append(CCFLAGS=sse42_flags)
 
         if env["platform"] == "windows" and not env.msvc and env["arch"] == "x86_32":
             env_thirdparty.Append(CCFLAGS=["-mstackrealign"])
     elif isa == "avx":
         env_thirdparty.Append(CPPDEFINES=["EMBREE_TARGET_AVX"])
 
-        if not arm:
-            env_thirdparty.Append(CCFLAGS=avx_flags)
-        else:
+        if arm:
             env_thirdparty.Append(CPPDEFINES=avx_defines)
+        elif not env.msvc:
+            env_thirdparty.Append(CCFLAGS=avx_flags)
     elif isa == "avx2":
         env_thirdparty.Append(CPPDEFINES=["EMBREE_TARGET_AVX2"])
 
-        if not arm:
-            env_thirdparty.Append(CCFLAGS=avx2_flags)
-        else:
+        if arm:
             env_thirdparty.Append(CPPDEFINES=avx2_defines)
+        elif not env.msvc:
+            env_thirdparty.Append(CCFLAGS=avx2_flags)
     elif isa == "avx512":
         env_thirdparty.Append(CPPDEFINES=["EMBREE_TARGET_AVX512"])
-
-        if not arm:
-            env_thirdparty.Append(CCFLAGS=avx512_flags)
 
     if env["platform"] == "windows":
         if env.msvc:

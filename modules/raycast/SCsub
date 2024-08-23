@@ -76,24 +76,32 @@ if env["builtin_embree"]:
     ]
 
     if env.msvc:
-        ...
+        flags = env_raycast.subst("$CCFLAGS $CXXFLAGS")
+        m = re.search(r"/arch:(AVX512|AVX2|AVX)", flags)
+        if m is not None:
+            isa = m.group(1).lower()
+        else:
+            isa = "sse2"
     else:
-        defines = subprocess.check_output(env_raycast.subst(env_raycast["CXXCOM"], target=File('-')) + " -E -dM -x c++ -", input='', encoding='utf-8', shell=True)
+        env_isa_test = env_raycast.Clone()
+        env_isa_test.Append(CCFLAGS=["-E", "-dM", "-x c++"])
+        command = env_isa_test.subst(env_isa_test["CXXCOM"], source=File('-'), target=File('-'))
+        defines = subprocess.check_output(command, input='', encoding='utf-8', shell=True)
 
-    def is_defined(name: str) -> bool:
-        m = re.search(fr"^#define\s{name}(?:\s|\Z)", defines, flags=re.MULTILINE)
-        return m is not None
+        def is_defined(name: str) -> bool:
+            m = re.search(fr"^#define\s{name}(?:\s|\Z)", defines, flags=re.MULTILINE)
+            return m is not None
 
-    if is_defined("__AVX512F__") and is_defined("__AVX512DQ__") and is_defined("__AVX512CD__") and is_defined("__AVX512BW__") and is_defined("__AVX512VL__"):
-        isa = "avx512"
-    elif is_defined("__F16C__") and is_defined("__AVX2__") and is_defined("__FMA__") and is_defined("__LZCNT__") and is_defined("__BMI__") and is_defined("__BMI2__"):
-        isa = "avx2"
-    elif is_defined("__AVX__"):
-        isa = "avx"
-    elif is_defined("__SSE4_1__") and is_defined("__SSE4_2__"):
-        isa = "sse42"
-    else:
-        isa = "sse2"
+        if is_defined("__AVX512F__") and is_defined("__AVX512DQ__") and is_defined("__AVX512CD__") and is_defined("__AVX512BW__") and is_defined("__AVX512VL__"):
+            isa = "avx512"
+        elif is_defined("__F16C__") and is_defined("__AVX2__") and is_defined("__FMA__") and is_defined("__LZCNT__") and is_defined("__BMI__") and is_defined("__BMI2__"):
+            isa = "avx2"
+        elif is_defined("__AVX__"):
+            isa = "avx"
+        elif is_defined("__SSE4_1__") and is_defined("__SSE4_2__"):
+            isa = "sse42"
+        else:
+            isa = "sse2"
 
     print("ENABLED ISA: " + isa)
 
